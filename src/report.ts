@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import type { GroupMetadata } from '@whiskeysockets/baileys'
 import type { MigrationAnalysis, ParticipantRecord } from './groups.js'
+import type { RealRunResult } from './real-run.js'
 
 function csvCell(value: unknown): string {
   const text = value == null ? '' : String(value)
@@ -66,6 +67,62 @@ export async function writeDryRunReports(
     ...participantRows('manual_exclusion', analysis.manuallyExcluded),
     ...participantRows('already_in_destination', analysis.alreadyInDestination),
     ...participantRows('duplicate_source', analysis.duplicateSourceSkipped),
+  ]
+
+  await writeFile(
+    csvPath,
+    `${rows.map((row) => row.map(csvCell).join(',')).join('\n')}\n`,
+    'utf8',
+  )
+
+  return { jsonPath, csvPath }
+}
+
+export async function writeRealRunReport(
+  source: GroupMetadata,
+  destination: GroupMetadata,
+  result: RealRunResult,
+): Promise<{ jsonPath: string; csvPath: string }> {
+  await mkdir('reports', { recursive: true })
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const basePath = `reports/real-run-${stamp}`
+  const jsonPath = `${basePath}.json`
+  const csvPath = `${basePath}.csv`
+
+  const report = {
+    generatedAt: new Date().toISOString(),
+    source: { id: source.id, subject: source.subject },
+    destination: { id: destination.id, subject: destination.subject },
+    maxUsers: 1,
+    result,
+  }
+
+  await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+
+  const rows = [
+    [
+      'status',
+      'apiStatus',
+      'confirmed',
+      'requestJid',
+      'id',
+      'phoneNumber',
+      'lid',
+      'attemptedAt',
+      'error',
+    ],
+    [
+      result.status,
+      result.apiStatus,
+      result.confirmed,
+      result.requestJid,
+      result.target.id,
+      result.target.phoneNumber ?? '',
+      result.target.lid ?? '',
+      result.attemptedAt,
+      result.error ?? '',
+    ],
   ]
 
   await writeFile(
