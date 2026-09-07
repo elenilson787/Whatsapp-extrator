@@ -5,8 +5,8 @@
   "description": "Ferramenta independente para listar grupos WhatsApp e preparar migração autorizada de participantes entre grupos.",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx src/launcher.ts",
+    "start": "tsx src/launcher.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
