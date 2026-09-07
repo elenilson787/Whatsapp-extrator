@@ -30,9 +30,16 @@ const c: ParticipantRecord = {
   admin: null,
 }
 
-test('selectAutomaticCandidates pega somente pendentes e respeita limite', () => {
+const lidOnly: ParticipantRecord = {
+  id: '400@lid',
+  phoneNumber: undefined,
+  lid: undefined,
+  admin: null,
+}
+
+test('selectAutomaticCandidates pega somente pendentes com telefone conhecido e respeita limite', () => {
   const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
-  const selected = selectAutomaticCandidates([a, b, c], checkpoint, 2)
+  const selected = selectAutomaticCandidates([lidOnly, a, b, c], checkpoint, 2)
   assert.deepEqual(selected.map((item) => item.id), [a.id, b.id])
 })
 
@@ -65,14 +72,20 @@ test('checkpoint reconhece o mesmo participante mesmo se vier só pelo LID', () 
     confirmed: true,
   })
 
-  const lidOnly: ParticipantRecord = {
+  const sameByLidOnly: ParticipantRecord = {
     id: '100@lid',
     phoneNumber: undefined,
     lid: undefined,
     admin: null,
   }
 
-  assert.equal(wasProcessed(lidOnly, checkpoint), true)
+  assert.equal(wasProcessed(sameByLidOnly, checkpoint), true)
+})
+
+test('AUTO_BATCH ignora candidato LID-only mesmo se estiver pendente', () => {
+  const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
+  const selected = selectAutomaticCandidates([lidOnly, a], checkpoint, 5)
+  assert.deepEqual(selected.map((item) => item.id), [a.id])
 })
 
 test('AUTO_BATCH rejeita limite acima de 5', () => {
