@@ -7,9 +7,14 @@ import {
   listGroups,
   resolveTargetPhone,
 } from './groups.js'
-import type { ResolvedPhoneIdentity } from './groups.js'
+import type { ParticipantRecord, ResolvedPhoneIdentity } from './groups.js'
 import { parseExcludedIdentities } from './identity.js'
-import { executeSingleAdd, parseMaxUsers, selectPinnedCandidate } from './real-run.js'
+import {
+  executeSingleAdd,
+  parseMaxUsers,
+  participantRequestJid,
+  selectPinnedCandidate,
+} from './real-run.js'
 import { writeDryRunReports, writeRealRunReport } from './report.js'
 import { diagnoseTarget, targetDiagnosisMessage } from './target-diagnosis.js'
 import {
@@ -19,11 +24,19 @@ import {
 } from './destination-permission.js'
 import {
   executeControlledBatch,
+  parseBatchDelayMs,
   parseBatchMaxUsers,
   parseTargetPhones,
   selectPinnedCandidates,
 } from './batch-run.js'
 import { writeBatchRunReport } from './batch-report.js'
+import {
+  loadAutoCheckpoint,
+  recordCheckpointResult,
+  saveAutoCheckpoint,
+  selectAutomaticCandidates,
+} from './auto-batch.js'
+import type { AutoCheckpoint } from './auto-batch.js'
 
 function previewLimit(): number {
   const parsed = Number(process.env.PREVIEW_LIMIT ?? '5')
@@ -35,14 +48,33 @@ function knownPhoneCount(participants: Array<{ phoneNumber?: string | null }>): 
   return participants.filter((participant) => Boolean(participant.phoneNumber)).length
 }
 
+function checkpointProcessedCount(checkpoint: AutoCheckpoint): number {
+  return new Set(
+    Object.values(checkpoint.processed).map(
+      (entry) => `${entry.attemptedAt}|${entry.requestJid}`,
+    ),
+  ).size
+}
+
+function printCandidate(index: number, participant: ParticipantRecord): void {
+  console.log(
+    `${index + 1}. id=${participant.id} phone=${participant.phoneNumber ?? '-'} lid=${participant.lid ?? '-'}`,
+  )
+}
+
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.4.0')
+  console.log('       WHATSAPP-EXTRATOR v0.5.0')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
   const realRun = process.env.REAL_RUN === 'true'
   const batchRun = process.env.BATCH_RUN === 'true'
+  const autoBatch = process.env.AUTO_BATCH === 'true'
+
+  if (batchRun && autoBatch) {
+    throw new Error('Use BATCH_RUN ou AUTO_BATCH, nunca os dois ao mesmo tempo.')
+  }
 
   const sock = await connectWhatsApp()
   const groups = await listGroups(sock)
@@ -117,11 +149,7 @@ async function main() {
   const preview = analysis.candidates.slice(0, limit)
 
   console.log(`\nPrimeiros ${preview.length} candidato(s):`)
-  for (const [index, participant] of preview.entries()) {
-    console.log(
-      `${index + 1}. id=${participant.id} phone=${participant.phoneNumber ?? '-'} lid=${participant.lid ?? '-'}`,
-    )
-  }
+  preview.forEach((participant, index) => printCandidate(index, participant))
 
   const targetPhoneRaw = process.env.TARGET_PHONE?.trim()
   const targetParticipantRaw = process.env.TARGET_PARTICIPANT?.trim()
@@ -130,6 +158,10 @@ async function main() {
   const configuredTargetModes = [targetPhoneRaw, targetParticipantRaw, targetPhonesRaw].filter(Boolean)
   if (configuredTargetModes.length > 1) {
     throw new Error('Use apenas um modo de alvo: TARGET_PHONE, TARGET_PARTICIPANT ou TARGET_PHONES.')
+  }
+
+  if (autoBatch && configuredTargetModes.length > 0) {
+    throw new Error('AUTO_BATCH seleciona a fila automaticamente. Remova TARGET_PHONE, TARGET_PARTICIPANT e TARGET_PHONES.')
   }
 
   let resolvedTarget: ResolvedPhoneIdentity | undefined
@@ -167,6 +199,28 @@ async function main() {
     }
   }
 
+  let autoCheckpoint: AutoCheckpoint | undefined
+  let automaticCandidates: ParticipantRecord[] | undefined
+  let autoMaxUsers: number | undefined
+
+  if (autoBatch) {
+    autoMaxUsers = parseBatchMaxUsers(process.env.MAX_USERS)
+    autoCheckpoint = await loadAutoCheckpoint(source.id, destination.id)
+    automaticCandidates = selectAutomaticCandidates(
+      analysis.candidates,
+      autoCheckpoint,
+      autoMaxUsers,
+    )
+
+    console.log('\n[AUTO_BATCH — PRÉVIA DA PRÓXIMA FILA]')
+    console.log(`Checkpoint: ${checkpointProcessedCount(autoCheckpoint)} participante(s) já processado(s) neste par de grupos.`)
+    console.log(`Próximos candidatos automáticos: ${automaticCandidates.length}/${autoMaxUsers}`)
+    automaticCandidates.forEach((participant, index) => printCandidate(index, participant))
+    if (automaticCandidates.length === 0) {
+      console.log('Nenhum candidato pendente no checkpoint atual.')
+    }
+  }
+
   const dryRunReports = await writeDryRunReports(source, destination, analysis)
   console.log(`\nRelatório JSON: ${dryRunReports.jsonPath}`)
   console.log(`Relatório CSV:  ${dryRunReports.csvPath}`)
@@ -194,6 +248,70 @@ async function main() {
     throw new Error('Não há candidato válido para o teste real.')
   }
 
+  if (autoBatch) {
+    if (process.env.OPT_IN_SOURCE_CONFIRMED !== 'true') {
+      throw new Error(
+        'AUTO_BATCH real exige OPT_IN_SOURCE_CONFIRMED=true. Use esse modo somente quando o Grupo A contiver participantes que autorizaram a migração.',
+      )
+    }
+
+    if (!autoCheckpoint || !automaticCandidates || !autoMaxUsers) {
+      throw new Error('Falha interna ao preparar a fila automática.')
+    }
+
+    if (automaticCandidates.length === 0) {
+      console.log('\n[AUTO_BATCH] Nenhum candidato pendente. Nenhuma chamada de inclusão foi enviada.')
+      return
+    }
+
+    const delayMs = parseBatchDelayMs(process.env.BATCH_DELAY_MS)
+    console.log(`\n[AUTO_BATCH CONTROLADO — ${automaticCandidates.length} PARTICIPANTE(S)]`)
+    console.log(`Limite rígido: MAX_USERS=${autoMaxUsers}`)
+    console.log(`Intervalo fixo de segurança: ${delayMs} ms entre tentativas.`)
+    console.log('A seleção é automática entre os candidatos elegíveis ainda não processados.')
+    console.log('O checkpoint é salvo após cada resultado para impedir repetição automática.')
+    console.log('Não há aleatorização nem mecanismo para contornar controles do WhatsApp.')
+
+    let checkpointPath = ''
+    const batchResult = await executeControlledBatch(
+      sock,
+      destination.id,
+      automaticCandidates,
+      {
+        maxUsers: autoMaxUsers,
+        delayMs,
+        fetchDestination: () => getGroup(sock, destination.id),
+        onResult: async (result) => {
+          recordCheckpointResult(autoCheckpoint!, result)
+          checkpointPath = await saveAutoCheckpoint(autoCheckpoint!)
+        },
+      },
+    )
+    const batchReport = await writeBatchRunReport(source, destination, batchResult)
+
+    console.log('\nResultados do AUTO_BATCH:')
+    for (const [index, result] of batchResult.results.entries()) {
+      console.log(
+        `${index + 1}. ${result.requestJid} → ${result.status} | API=${result.apiStatus} | confirmado=${result.confirmed ? 'SIM' : 'NÃO'}`,
+      )
+    }
+    if (batchResult.stopReason) console.log(`Parada segura: ${batchResult.stopReason}`)
+    console.log(`Tentados: ${batchResult.attempted}/${batchResult.requested}`)
+    console.log(`Checkpoint: ${checkpointPath || 'sem alteração'}`)
+    console.log(`Relatório do lote: ${batchReport.jsonPath}`)
+    console.log(`CSV do lote:       ${batchReport.csvPath}`)
+
+    if (
+      batchResult.stoppedEarly ||
+      batchResult.results.some(
+        (item) => !['added', 'invite_required'].includes(item.status),
+      )
+    ) {
+      process.exitCode = 1
+    }
+    return
+  }
+
   if (batchRun) {
     if (!resolvedBatchTargets) {
       throw new Error('BATCH_RUN=true exige TARGET_PHONES com os números previamente autorizados.')
@@ -214,7 +332,7 @@ async function main() {
 
     const batchResult = await executeControlledBatch(sock, destination.id, candidates, {
       maxUsers,
-      delayMs: Number(process.env.BATCH_DELAY_MS ?? '5000'),
+      delayMs: Number(process.env.BATCH_DELAY_MS ?? '15000'),
       fetchDestination: () => getGroup(sock, destination.id),
     })
     const batchReport = await writeBatchRunReport(source, destination, batchResult)
@@ -230,7 +348,12 @@ async function main() {
     console.log(`Relatório do lote: ${batchReport.jsonPath}`)
     console.log(`CSV do lote:       ${batchReport.csvPath}`)
 
-    if (batchResult.stoppedEarly || batchResult.results.some((item) => !['added', 'invite_required'].includes(item.status))) {
+    if (
+      batchResult.stoppedEarly ||
+      batchResult.results.some(
+        (item) => !['added', 'invite_required'].includes(item.status),
+      )
+    ) {
       process.exitCode = 1
     }
     return
