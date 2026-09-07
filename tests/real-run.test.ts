@@ -35,7 +35,7 @@ test('participantRequestJid prefere phoneNumber', () => {
   assert.equal(participantRequestJid(candidate), '557791457500@s.whatsapp.net')
 })
 
-test('executeSingleAdd para em resposta diferente de 200', async () => {
+test('executeSingleAdd classifica 403 como invite_required e não tenta novamente', async () => {
   let metadataCalls = 0
   const sock = {
     groupParticipantsUpdate: async () => [
@@ -48,9 +48,25 @@ test('executeSingleAdd para em resposta diferente de 200', async () => {
   } as unknown as Pick<WASocket, 'groupParticipantsUpdate' | 'groupMetadata'>
 
   const result = await executeSingleAdd(sock, 'grupo@g.us', candidate)
-  assert.equal(result.status, 'rejected')
+  assert.equal(result.status, 'invite_required')
+  assert.equal(result.apiStatus, '403')
   assert.equal(result.confirmed, false)
+  assert.match(result.error ?? '', /privacidade/i)
   assert.equal(metadataCalls, 0)
+})
+
+test('executeSingleAdd mantém outros status não-200 como rejected', async () => {
+  const sock = {
+    groupParticipantsUpdate: async () => [
+      { status: '500', jid: candidate.phoneNumber!, content: {} as never },
+    ],
+    groupMetadata: async () => ({ participants: [] }) as unknown as GroupMetadata,
+  } as unknown as Pick<WASocket, 'groupParticipantsUpdate' | 'groupMetadata'>
+
+  const result = await executeSingleAdd(sock, 'grupo@g.us', candidate)
+  assert.equal(result.status, 'rejected')
+  assert.equal(result.apiStatus, '500')
+  assert.equal(result.confirmed, false)
 })
 
 test('executeSingleAdd confirma membro após resposta 200', async () => {
