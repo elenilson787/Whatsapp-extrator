@@ -29,10 +29,16 @@ export type MigrationAnalysis = {
   candidates: ParticipantRecord[]
 }
 
+export type ResolvedPhoneIdentity = {
+  phoneNumber: string
+  lid?: string
+}
+
 type LidMappingResolver = {
   getPNsForLIDs: (
     lids: string[],
   ) => Promise<Array<{ lid: string; pn: string }> | null>
+  getLIDForPN: (pn: string) => Promise<string | null>
 }
 
 function isOwner(group: GroupMetadata, participant: ParticipantRecord): boolean {
@@ -72,9 +78,33 @@ function participantLid(participant: ParticipantRecord): string | undefined {
   return undefined
 }
 
+export async function resolvePhoneIdentity(
+  resolver: Pick<LidMappingResolver, 'getLIDForPN'>,
+  rawPhone: string,
+): Promise<ResolvedPhoneIdentity> {
+  const phoneNumber = normalizeInputJid(rawPhone)
+
+  if (!phoneNumber.endsWith('@s.whatsapp.net')) {
+    throw new Error('TARGET_PHONE deve conter um número de telefone válido, com DDI e DDD.')
+  }
+
+  let lid: string | null = null
+  try {
+    lid = await resolver.getLIDForPN(phoneNumber)
+  } catch {
+    // O PN continua sendo uma identidade válida mesmo se a sessão não conseguir
+    // consultar o alias LID. Apenas não liberamos correspondência por LID nesse caso.
+  }
+
+  return {
+    phoneNumber,
+    lid: lid ? normalizeInputJid(lid) : undefined,
+  }
+}
+
 export async function enrichGroupPhoneNumbers(
   group: GroupMetadata,
-  resolver: LidMappingResolver,
+  resolver: Pick<LidMappingResolver, 'getPNsForLIDs'>,
 ): Promise<GroupMetadata> {
   const lids = [
     ...new Set(
@@ -141,6 +171,13 @@ export async function listGroups(sock: WASocket): Promise<GroupSummary[]> {
 export async function getGroup(sock: WASocket, jid: string): Promise<GroupMetadata> {
   const group = await sock.groupMetadata(jid)
   return enrichGroupPhoneNumbers(group, sock.signalRepository.lidMapping)
+}
+
+export async function resolveTargetPhone(
+  sock: WASocket,
+  rawPhone: string,
+): Promise<ResolvedPhoneIdentity> {
+  return resolvePhoneIdentity(sock.signalRepository.lidMapping, rawPhone)
 }
 
 export function analyzeMigration(
