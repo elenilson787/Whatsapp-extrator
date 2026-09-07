@@ -37,10 +37,18 @@ const lidOnly: ParticipantRecord = {
   admin: null,
 }
 
-test('selectAutomaticCandidates pega somente pendentes com telefone conhecido e respeita limite', () => {
+const allOptedIn = [a.phoneNumber!, b.phoneNumber!, c.phoneNumber!]
+
+test('selectAutomaticCandidates pega somente opt-ins pendentes e respeita limite', () => {
   const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
-  const selected = selectAutomaticCandidates([lidOnly, a, b, c], checkpoint, 2)
+  const selected = selectAutomaticCandidates([lidOnly, a, b, c], checkpoint, 2, allOptedIn)
   assert.deepEqual(selected.map((item) => item.id), [a.id, b.id])
+})
+
+test('AUTO_BATCH exclui candidato que não está na allowlist de opt-in', () => {
+  const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
+  const selected = selectAutomaticCandidates([a, b, c], checkpoint, 5, [b.phoneNumber!])
+  assert.deepEqual(selected.map((item) => item.id), [b.id])
 })
 
 test('checkpoint impede nova seleção do mesmo participante por qualquer alias', () => {
@@ -57,7 +65,7 @@ test('checkpoint impede nova seleção do mesmo participante por qualquer alias'
   recordCheckpointResult(checkpoint, result)
 
   assert.equal(wasProcessed(a, checkpoint), true)
-  const selected = selectAutomaticCandidates([a, b], checkpoint, 5)
+  const selected = selectAutomaticCandidates([a, b], checkpoint, 5, allOptedIn)
   assert.deepEqual(selected.map((item) => item.id), [b.id])
 })
 
@@ -84,11 +92,14 @@ test('checkpoint reconhece o mesmo participante mesmo se vier só pelo LID', () 
 
 test('AUTO_BATCH ignora candidato LID-only mesmo se estiver pendente', () => {
   const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
-  const selected = selectAutomaticCandidates([lidOnly, a], checkpoint, 5)
+  const selected = selectAutomaticCandidates([lidOnly, a], checkpoint, 5, allOptedIn)
   assert.deepEqual(selected.map((item) => item.id), [a.id])
 })
 
 test('AUTO_BATCH rejeita limite acima de 5', () => {
   const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
-  assert.throws(() => selectAutomaticCandidates([a], checkpoint, 6), /no máximo 5/i)
+  assert.throws(
+    () => selectAutomaticCandidates([a], checkpoint, 6, allOptedIn),
+    /no máximo 5/i,
+  )
 })
