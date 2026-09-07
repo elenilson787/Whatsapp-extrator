@@ -97,6 +97,32 @@ export function wasProcessed(
   return identityJids(participant).some((jid) => Boolean(checkpoint.processed[jid]))
 }
 
+export function eligibleAutomaticCandidates(
+  candidates: ParticipantRecord[],
+  optInPhones?: string[],
+): ParticipantRecord[] {
+  const configuredOptInFile = process.env.OPT_IN_FILE?.trim()
+  const allowedPhones = optInPhones ?? (
+    configuredOptInFile ? loadOptInPhonesFromEnv() : undefined
+  )
+
+  // Com arquivo de opt-in, o cruzamento é estrito com a allowlist.
+  // Sem arquivo, somente candidatos cujo PN foi resolvido pela sessão são elegíveis.
+  // A execução REAL continua exigindo confirmação explícita de autorização.
+  return allowedPhones
+    ? filterCandidatesByOptIn(candidates, allowedPhones)
+    : candidates.filter((candidate) => Boolean(candidate.phoneNumber))
+}
+
+export function pendingAutomaticCandidates(
+  candidates: ParticipantRecord[],
+  checkpoint: AutoCheckpoint,
+  optInPhones?: string[],
+): ParticipantRecord[] {
+  return eligibleAutomaticCandidates(candidates, optInPhones)
+    .filter((candidate) => !wasProcessed(candidate, checkpoint))
+}
+
 export function selectAutomaticCandidates(
   candidates: ParticipantRecord[],
   checkpoint: AutoCheckpoint,
@@ -107,21 +133,7 @@ export function selectAutomaticCandidates(
     throw new Error('AUTO_BATCH aceita no máximo 5 participantes por execução.')
   }
 
-  const configuredOptInFile = process.env.OPT_IN_FILE?.trim()
-  const allowedPhones = optInPhones ?? (
-    configuredOptInFile ? loadOptInPhonesFromEnv() : undefined
-  )
-
-  // Se houver arquivo de opt-in, fazemos o cruzamento estrito com a allowlist.
-  // Sem arquivo, a lista é extraída automaticamente do próprio Grupo A,
-  // usando somente candidatos cujo telefone (PN) foi resolvido pela sessão.
-  // A execução REAL continua protegida por OPT_IN_SOURCE_CONFIRMED=true no index.
-  const eligibleCandidates = allowedPhones
-    ? filterCandidatesByOptIn(candidates, allowedPhones)
-    : candidates.filter((candidate) => Boolean(candidate.phoneNumber))
-
-  return eligibleCandidates
-    .filter((candidate) => !wasProcessed(candidate, checkpoint))
+  return pendingAutomaticCandidates(candidates, checkpoint, optInPhones)
     .slice(0, maxUsers)
 }
 
