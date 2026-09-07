@@ -7,8 +7,22 @@ import {
   operatorDashboardLines,
   parseOperatorBatchSize,
   parseOperatorDelaySeconds,
+  parseOperatorMainMenu,
   parseOperatorMode,
 } from '../src/operator-utils.js'
+
+test('parseOperatorMainMenu reconhece todas as opções do menu principal', () => {
+  assert.equal(parseOperatorMainMenu('1'), 'new')
+  assert.equal(parseOperatorMainMenu('nova'), 'new')
+  assert.equal(parseOperatorMainMenu('2'), 'continue')
+  assert.equal(parseOperatorMainMenu('continuar'), 'continue')
+  assert.equal(parseOperatorMainMenu('3'), 'status')
+  assert.equal(parseOperatorMainMenu('fila'), 'status')
+  assert.equal(parseOperatorMainMenu('4'), 'history')
+  assert.equal(parseOperatorMainMenu('histórico'), 'history')
+  assert.equal(parseOperatorMainMenu('5'), 'exit')
+  assert.throws(() => parseOperatorMainMenu('9'), /Escolha 1/i)
+})
 
 test('parseOperatorMode reconhece prévia, lote e sair', () => {
   assert.equal(parseOperatorMode('1'), 'preview')
