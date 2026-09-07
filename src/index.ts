@@ -12,6 +12,18 @@ import { parseExcludedIdentities } from './identity.js'
 import { executeSingleAdd, parseMaxUsers, selectPinnedCandidate } from './real-run.js'
 import { writeDryRunReports, writeRealRunReport } from './report.js'
 import { diagnoseTarget, targetDiagnosisMessage } from './target-diagnosis.js'
+import {
+  assertDestinationCanAttempt,
+  destinationAddPermission,
+  destinationAddPermissionLabel,
+} from './destination-permission.js'
+import {
+  executeControlledBatch,
+  parseBatchMaxUsers,
+  parseTargetPhones,
+  selectPinnedCandidates,
+} from './batch-run.js'
+import { writeBatchRunReport } from './batch-report.js'
 
 function previewLimit(): number {
   const parsed = Number(process.env.PREVIEW_LIMIT ?? '5')
@@ -25,11 +37,12 @@ function knownPhoneCount(participants: Array<{ phoneNumber?: string | null }>): 
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.3.4')
+  console.log('       WHATSAPP-EXTRATOR v0.4.0')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
   const realRun = process.env.REAL_RUN === 'true'
+  const batchRun = process.env.BATCH_RUN === 'true'
 
   const sock = await connectWhatsApp()
   const groups = await listGroups(sock)
@@ -74,9 +87,11 @@ async function main() {
   const sourceIsAdmin = isCurrentUserAdmin(source, selfJids)
   const destinationIsAdmin = isCurrentUserAdmin(destination, selfJids)
   const destinationMembership = findSelfParticipant(destination, selfJids)
+  const destinationPermission = destinationAddPermission(destination, destinationIsAdmin)
 
   console.log(`\nConta no Grupo A: ${sourceIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
   console.log(`Conta no Grupo B: ${destinationIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
+  console.log(`Permissão de inclusão no Grupo B: ${destinationAddPermissionLabel(destinationPermission)}`)
   console.log(
     `PN conhecido na origem: ${knownPhoneCount(source.participants)}/${source.participants.length}`,
   )
@@ -110,9 +125,11 @@ async function main() {
 
   const targetPhoneRaw = process.env.TARGET_PHONE?.trim()
   const targetParticipantRaw = process.env.TARGET_PARTICIPANT?.trim()
+  const targetPhonesRaw = process.env.TARGET_PHONES?.trim()
 
-  if (targetPhoneRaw && targetParticipantRaw) {
-    throw new Error('Use TARGET_PHONE ou TARGET_PARTICIPANT, não os dois ao mesmo tempo.')
+  const configuredTargetModes = [targetPhoneRaw, targetParticipantRaw, targetPhonesRaw].filter(Boolean)
+  if (configuredTargetModes.length > 1) {
+    throw new Error('Use apenas um modo de alvo: TARGET_PHONE, TARGET_PARTICIPANT ou TARGET_PHONES.')
   }
 
   let resolvedTarget: ResolvedPhoneIdentity | undefined
@@ -134,6 +151,22 @@ async function main() {
     }
   }
 
+  let resolvedBatchTargets: ResolvedPhoneIdentity[] | undefined
+  if (targetPhonesRaw) {
+    const phones = parseTargetPhones(targetPhonesRaw)
+    resolvedBatchTargets = []
+
+    console.log('\n[LOTE DIRECIONADO — PRÉ-VALIDAÇÃO]')
+    for (const [index, phone] of phones.entries()) {
+      const resolved = await resolveTargetPhone(sock, phone)
+      const diagnosis = diagnoseTarget(analysis, resolved)
+      resolvedBatchTargets.push(resolved)
+      console.log(
+        `${index + 1}. phone=${resolved.phoneNumber} lid=${resolved.lid ?? '-'} válido=${diagnosis.code === 'candidate' ? 'SIM' : 'NÃO'} — ${targetDiagnosisMessage(diagnosis.code)}`,
+      )
+    }
+  }
+
   const dryRunReports = await writeDryRunReports(source, destination, analysis)
   console.log(`\nRelatório JSON: ${dryRunReports.jsonPath}`)
   console.log(`Relatório CSV:  ${dryRunReports.csvPath}`)
@@ -143,27 +176,67 @@ async function main() {
     return
   }
 
-  parseMaxUsers(process.env.MAX_USERS)
-
   if (!destinationMembership) {
     throw new Error('A conta conectada precisa ser participante do Grupo B para o teste real.')
   }
 
-  if (!destinationIsAdmin) {
-    if (process.env.ALLOW_NON_ADMIN_DESTINATION !== 'true') {
-      throw new Error(
-        'Grupo B está em modo MEMBRO. Para testar a permissão do próprio WhatsApp, defina ALLOW_NON_ADMIN_DESTINATION=true. A ferramenta não contorna restrições do grupo.',
-      )
-    }
+  assertDestinationCanAttempt(
+    destinationPermission,
+    process.env.ALLOW_NON_ADMIN_DESTINATION === 'true',
+  )
 
-    console.log('\n[AVISO] Grupo B: conta não é admin.')
-    console.log('A tentativa será feita uma única vez e o próprio WhatsApp decidirá se membros podem adicionar participantes.')
-    console.log('Se o servidor negar a operação, não haverá retry nem tentativa de contorno.')
+  if (!destinationIsAdmin && destinationPermission === 'unknown') {
+    console.log('\n[AVISO] memberAddMode não foi informado pelo WhatsApp.')
+    console.log('A tentativa controlada foi explicitamente autorizada por ALLOW_NON_ADMIN_DESTINATION=true.')
   }
 
   if (analysis.candidates.length === 0) {
     throw new Error('Não há candidato válido para o teste real.')
   }
+
+  if (batchRun) {
+    if (!resolvedBatchTargets) {
+      throw new Error('BATCH_RUN=true exige TARGET_PHONES com os números previamente autorizados.')
+    }
+
+    const maxUsers = parseBatchMaxUsers(process.env.MAX_USERS)
+    const selected = selectPinnedCandidates(analysis.candidates, resolvedBatchTargets, maxUsers)
+    const candidates = selected.map((candidate, index) => ({
+      ...candidate,
+      phoneNumber: resolvedBatchTargets![index].phoneNumber,
+      lid: resolvedBatchTargets![index].lid ?? candidate.lid,
+    }))
+
+    console.log(`\n[REAL RUN CONTROLADO — LOTE DE ${candidates.length}]`)
+    console.log(`Limite rígido: MAX_USERS=${maxUsers}`)
+    console.log('Somente os números explicitamente informados em TARGET_PHONES serão processados.')
+    console.log('O lote para automaticamente em erro de permissão, rejeição inesperada ou falha de confirmação.')
+
+    const batchResult = await executeControlledBatch(sock, destination.id, candidates, {
+      maxUsers,
+      delayMs: Number(process.env.BATCH_DELAY_MS ?? '5000'),
+      fetchDestination: () => getGroup(sock, destination.id),
+    })
+    const batchReport = await writeBatchRunReport(source, destination, batchResult)
+
+    console.log('\nResultados do lote:')
+    for (const [index, result] of batchResult.results.entries()) {
+      console.log(
+        `${index + 1}. ${result.requestJid} → ${result.status} | API=${result.apiStatus} | confirmado=${result.confirmed ? 'SIM' : 'NÃO'}`,
+      )
+    }
+    if (batchResult.stopReason) console.log(`Parada segura: ${batchResult.stopReason}`)
+    console.log(`Tentados: ${batchResult.attempted}/${batchResult.requested}`)
+    console.log(`Relatório do lote: ${batchReport.jsonPath}`)
+    console.log(`CSV do lote:       ${batchReport.csvPath}`)
+
+    if (batchResult.stoppedEarly || batchResult.results.some((item) => !['added', 'invite_required'].includes(item.status))) {
+      process.exitCode = 1
+    }
+    return
+  }
+
+  parseMaxUsers(process.env.MAX_USERS)
 
   const selected = selectPinnedCandidate(
     analysis.candidates,
@@ -185,7 +258,9 @@ async function main() {
   console.log('Limite rígido: MAX_USERS=1')
   console.log('Nenhuma segunda pessoa será processada nesta execução.')
 
-  const result = await executeSingleAdd(sock, destination.id, candidate)
+  const result = await executeSingleAdd(sock, destination.id, candidate, {
+    fetchDestination: () => getGroup(sock, destination.id),
+  })
   const realRunReport = await writeRealRunReport(source, destination, result)
 
   console.log(`\nStatus da API do WhatsApp: ${result.apiStatus}`)
