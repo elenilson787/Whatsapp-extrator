@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-extrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Ferramenta independente para listar grupos WhatsApp e preparar migração autorizada de participantes entre grupos.",
   "type": "module",
@@ -8,18 +8,20 @@
     "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@hapi/boom": "^10.0.4",
-    "@whiskeysockets/baileys": "^7.0.0-rc.6",
-    "pino": "^9.7.0",
-    "qrcode-terminal": "^0.12.0"
+    "@hapi/boom": "10.0.4",
+    "@whiskeysockets/baileys": "7.0.0-rc.6",
+    "pino": "9.7.0",
+    "qrcode-terminal": "0.12.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.30",
-    "@types/qrcode-terminal": "^0.12.2",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "@types/node": "22.15.30",
+    "@types/qrcode-terminal": "0.12.2",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3"
   }
 }
