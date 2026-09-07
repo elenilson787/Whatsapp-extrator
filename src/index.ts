@@ -1,6 +1,7 @@
 import { connectWhatsApp } from './whatsapp.js'
 import {
   analyzeMigration,
+  findSelfParticipant,
   getGroup,
   isCurrentUserAdmin,
   listGroups,
@@ -17,7 +18,7 @@ function previewLimit(): number {
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.3.0')
+  console.log('       WHATSAPP-EXTRATOR v0.3.1')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
@@ -63,13 +64,12 @@ async function main() {
     (value): value is string => Boolean(value),
   )
 
-  if (!isCurrentUserAdmin(source, selfJids)) {
-    throw new Error('A conta conectada precisa ser administradora do Grupo A para esta migração.')
-  }
+  const sourceIsAdmin = isCurrentUserAdmin(source, selfJids)
+  const destinationIsAdmin = isCurrentUserAdmin(destination, selfJids)
+  const destinationMembership = findSelfParticipant(destination, selfJids)
 
-  if (!isCurrentUserAdmin(destination, selfJids)) {
-    throw new Error('A conta conectada precisa ser administradora do Grupo B para esta migração.')
-  }
+  console.log(`\nConta no Grupo A: ${sourceIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
+  console.log(`Conta no Grupo B: ${destinationIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
 
   const excludedJids = parseExcludedIdentities(process.env.EXCLUDED_JIDS)
   const analysis = analyzeMigration(source, destination, { selfJids, excludedJids })
@@ -105,6 +105,22 @@ async function main() {
   }
 
   parseMaxUsers(process.env.MAX_USERS)
+
+  if (!destinationMembership) {
+    throw new Error('A conta conectada precisa ser participante do Grupo B para o teste real.')
+  }
+
+  if (!destinationIsAdmin) {
+    if (process.env.ALLOW_NON_ADMIN_DESTINATION !== 'true') {
+      throw new Error(
+        'Grupo B está em modo MEMBRO. Para testar a permissão do próprio WhatsApp, defina ALLOW_NON_ADMIN_DESTINATION=true. A ferramenta não contorna restrições do grupo.',
+      )
+    }
+
+    console.log('\n[AVISO] Grupo B: conta não é admin.')
+    console.log('A tentativa será feita uma única vez e o próprio WhatsApp decidirá se membros podem adicionar participantes.')
+    console.log('Se o servidor negar a operação, não haverá retry nem tentativa de contorno.')
+  }
 
   if (analysis.candidates.length === 0) {
     throw new Error('Não há candidato válido para o teste real.')
