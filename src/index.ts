@@ -37,6 +37,7 @@ import {
   selectAutomaticCandidates,
 } from './auto-batch.js'
 import type { AutoCheckpoint } from './auto-batch.js'
+import { selectGroupPairInteractively } from './group-selection.js'
 
 function previewLimit(): number {
   const parsed = Number(process.env.PREVIEW_LIMIT ?? '5')
@@ -64,13 +65,14 @@ function printCandidate(index: number, participant: ParticipantRecord): void {
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.5.0')
+  console.log('       WHATSAPP-EXTRATOR v0.6.0')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
-  const realRun = process.env.REAL_RUN === 'true'
-  const batchRun = process.env.BATCH_RUN === 'true'
-  const autoBatch = process.env.AUTO_BATCH === 'true'
+  const interactiveGroupSelection = process.argv.includes('--select-groups')
+  const realRun = !interactiveGroupSelection && process.env.REAL_RUN === 'true'
+  const batchRun = !interactiveGroupSelection && process.env.BATCH_RUN === 'true'
+  const autoBatch = !interactiveGroupSelection && process.env.AUTO_BATCH === 'true'
 
   if (batchRun && autoBatch) {
     throw new Error('Use BATCH_RUN ou AUTO_BATCH, nunca os dois ao mesmo tempo.')
@@ -93,13 +95,38 @@ async function main() {
     console.log(`   JID: ${group.id}`)
   }
 
-  const sourceJid = process.env.SOURCE_GROUP_JID
-  const destinationJid = process.env.DESTINATION_GROUP_JID
+  let sourceJid = process.env.SOURCE_GROUP_JID?.trim()
+  let destinationJid = process.env.DESTINATION_GROUP_JID?.trim()
 
-  if (!sourceJid && !destinationJid) {
-    console.log('\nInforme SOURCE_GROUP_JID e DESTINATION_GROUP_JID para executar o DRY RUN.')
-    console.log('Nenhum participante foi alterado.')
-    return
+  if (interactiveGroupSelection || !sourceJid || !destinationJid) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log('\nInforme SOURCE_GROUP_JID e DESTINATION_GROUP_JID para executar o DRY RUN.')
+      console.log('Em terminal interativo, use npm run dev -- --select-groups para escolher pela lista.')
+      console.log('Nenhum participante foi alterado.')
+      return
+    }
+
+    console.log('\n[SELEÇÃO INTERATIVA DE GRUPOS]')
+    console.log('Escolha pelos números exibidos na lista acima.')
+
+    const selectedPair = await selectGroupPairInteractively(
+      groups,
+      interactiveGroupSelection ? {} : { sourceJid, destinationJid },
+    )
+
+    sourceJid = selectedPair.source.id
+    destinationJid = selectedPair.destination.id
+
+    console.log('\nSeleção confirmada:')
+    console.log(`SOURCE_GROUP_JID=${sourceJid}`)
+    console.log(`DESTINATION_GROUP_JID=${destinationJid}`)
+
+    if (interactiveGroupSelection) {
+      console.log('\nModo --select-groups é sempre DRY RUN: REAL_RUN/BATCH_RUN/AUTO_BATCH foram ignorados nesta execução.')
+      console.log('Para reutilizar esta seleção no PowerShell:')
+      console.log(`$env:SOURCE_GROUP_JID="${sourceJid}"`)
+      console.log(`$env:DESTINATION_GROUP_JID="${destinationJid}"`)
+    }
   }
 
   if (!sourceJid || !destinationJid) {
@@ -151,9 +178,9 @@ async function main() {
   console.log(`\nPrimeiros ${preview.length} candidato(s):`)
   preview.forEach((participant, index) => printCandidate(index, participant))
 
-  const targetPhoneRaw = process.env.TARGET_PHONE?.trim()
-  const targetParticipantRaw = process.env.TARGET_PARTICIPANT?.trim()
-  const targetPhonesRaw = process.env.TARGET_PHONES?.trim()
+  const targetPhoneRaw = interactiveGroupSelection ? undefined : process.env.TARGET_PHONE?.trim()
+  const targetParticipantRaw = interactiveGroupSelection ? undefined : process.env.TARGET_PARTICIPANT?.trim()
+  const targetPhonesRaw = interactiveGroupSelection ? undefined : process.env.TARGET_PHONES?.trim()
 
   const configuredTargetModes = [targetPhoneRaw, targetParticipantRaw, targetPhonesRaw].filter(Boolean)
   if (configuredTargetModes.length > 1) {
