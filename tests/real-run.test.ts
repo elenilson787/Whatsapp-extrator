@@ -27,6 +27,22 @@ test('selectPinnedCandidate encontra candidato pelo phoneNumber', () => {
   assert.equal(selected.id, candidate.id)
 })
 
+test('selectPinnedCandidate encontra candidato LID por identidade resolvida do telefone', () => {
+  const lidOnly: ParticipantRecord = {
+    id: '106945021214761@lid',
+    phoneNumber: undefined,
+    lid: undefined,
+    admin: null,
+  }
+
+  const selected = selectPinnedCandidate([lidOnly], {
+    phoneNumber: '557791457500@s.whatsapp.net',
+    lid: '106945021214761@lid',
+  })
+
+  assert.equal(selected.id, lidOnly.id)
+})
+
 test('selectPinnedCandidate aborta se o alvo não estiver entre os candidatos', () => {
   assert.throws(() => selectPinnedCandidate([candidate], '5599999999999'))
 })
