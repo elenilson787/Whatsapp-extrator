@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import type { ParticipantRecord } from './groups.js'
 import { identityJids } from './identity.js'
 import type { RealRunResult } from './real-run.js'
+import { filterCandidatesByOptIn, loadOptInPhonesFromEnv } from './opt-in.js'
 
 export type AutoCheckpointEntry = {
   status: RealRunResult['status']
@@ -100,16 +101,16 @@ export function selectAutomaticCandidates(
   candidates: ParticipantRecord[],
   checkpoint: AutoCheckpoint,
   maxUsers: number,
+  optInPhones?: string[],
 ): ParticipantRecord[] {
   if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > 5) {
     throw new Error('AUTO_BATCH aceita no máximo 5 participantes por execução.')
   }
 
-  // Nesta etapa do hardening, o modo automático usa somente participantes
-  // cujo PN foi resolvido pela sessão. O caminho PN -> add -> confirmação já
-  // foi validado em teste real; candidatos LID-only permanecem fora da fila.
-  return candidates
-    .filter((candidate) => Boolean(candidate.phoneNumber))
+  const allowedPhones = optInPhones ?? loadOptInPhonesFromEnv()
+  const optedInCandidates = filterCandidatesByOptIn(candidates, allowedPhones)
+
+  return optedInCandidates
     .filter((candidate) => !wasProcessed(candidate, checkpoint))
     .slice(0, maxUsers)
 }
