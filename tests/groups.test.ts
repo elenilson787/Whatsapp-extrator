@@ -5,6 +5,7 @@ import {
   analyzeMigration,
   enrichGroupPhoneNumbers,
   isCurrentUserAdmin,
+  resolvePhoneIdentity,
 } from '../src/groups.js'
 
 function participant(
@@ -74,6 +75,42 @@ test('resolve phoneNumber a partir de LID conhecido na sessão', async () => {
   assert.equal(
     enriched.participants[1]?.phoneNumber,
     '5593999990001@s.whatsapp.net',
+  )
+})
+
+test('resolve TARGET_PHONE conhecido para PN + LID', async () => {
+  const resolved = await resolvePhoneIdentity(
+    {
+      getLIDForPN: async (pn) => {
+        assert.equal(pn, '557791457500@s.whatsapp.net')
+        return '106945021214761@lid'
+      },
+    },
+    '+55 (77) 91457-5000',
+  )
+
+  assert.equal(resolved.phoneNumber, '557791457500@s.whatsapp.net')
+  assert.equal(resolved.lid, '106945021214761@lid')
+})
+
+test('TARGET_PHONE continua com PN quando LID não está disponível', async () => {
+  const resolved = await resolvePhoneIdentity(
+    { getLIDForPN: async () => null },
+    '557791457500',
+  )
+
+  assert.equal(resolved.phoneNumber, '557791457500@s.whatsapp.net')
+  assert.equal(resolved.lid, undefined)
+})
+
+test('TARGET_PHONE rejeita identificador que não é número PN', async () => {
+  await assert.rejects(
+    () =>
+      resolvePhoneIdentity(
+        { getLIDForPN: async () => null },
+        '106945021214761@lid',
+      ),
+    /número de telefone válido/i,
   )
 })
 
