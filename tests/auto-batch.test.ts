@@ -39,7 +39,26 @@ const lidOnly: ParticipantRecord = {
 
 const allOptedIn = [a.phoneNumber!, b.phoneNumber!, c.phoneNumber!]
 
-test('selectAutomaticCandidates pega somente opt-ins pendentes e respeita limite', () => {
+function withoutOptInFile<T>(fn: () => T): T {
+  const previous = process.env.OPT_IN_FILE
+  delete process.env.OPT_IN_FILE
+  try {
+    return fn()
+  } finally {
+    if (previous === undefined) delete process.env.OPT_IN_FILE
+    else process.env.OPT_IN_FILE = previous
+  }
+}
+
+test('AUTO_BATCH sem arquivo extrai automaticamente candidatos com telefone conhecido', () => {
+  const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
+  const selected = withoutOptInFile(() =>
+    selectAutomaticCandidates([lidOnly, a, b, c], checkpoint, 2),
+  )
+  assert.deepEqual(selected.map((item) => item.id), [a.id, b.id])
+})
+
+test('selectAutomaticCandidates com allowlist pega somente opt-ins pendentes e respeita limite', () => {
   const checkpoint = createEmptyCheckpoint('source@g.us', 'dest@g.us')
   const selected = selectAutomaticCandidates([lidOnly, a, b, c], checkpoint, 2, allOptedIn)
   assert.deepEqual(selected.map((item) => item.id), [a.id, b.id])
