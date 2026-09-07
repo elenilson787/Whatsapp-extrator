@@ -94,6 +94,21 @@ test('executeSingleAdd classifica 403 sem add_request como forbidden', async () 
   assert.match(result.error ?? '', /permissão|restrição/i)
 })
 
+test('executeSingleAdd classifica 421 como permission_denied', async () => {
+  const sock = {
+    groupParticipantsUpdate: async () => [
+      { status: '421', jid: candidate.phoneNumber!, content: {} as never },
+    ],
+    groupMetadata: async () => ({ participants: [] }) as unknown as GroupMetadata,
+  } as unknown as Pick<WASocket, 'groupParticipantsUpdate' | 'groupMetadata'>
+
+  const result = await executeSingleAdd(sock, 'grupo@g.us', candidate)
+  assert.equal(result.status, 'permission_denied')
+  assert.equal(result.apiStatus, '421')
+  assert.equal(result.confirmed, false)
+  assert.match(result.error ?? '', /permissão/i)
+})
+
 test('executeSingleAdd mantém outros status não-200 como rejected', async () => {
   const sock = {
     groupParticipantsUpdate: async () => [
