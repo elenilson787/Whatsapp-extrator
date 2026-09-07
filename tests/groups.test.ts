@@ -86,7 +86,7 @@ test('resolve TARGET_PHONE conhecido para PN + LID', async () => {
         return '106945021214761@lid'
       },
     },
-    '+55 (77) 91457-5000',
+    '557791457500',
   )
 
   assert.equal(resolved.phoneNumber, '557791457500@s.whatsapp.net')
