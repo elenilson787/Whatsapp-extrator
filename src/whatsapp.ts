@@ -5,7 +5,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import type { WASocket } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
-import pino from 'pino'
+import { pino } from 'pino'
 import qrcode from 'qrcode-terminal'
 import { mkdir } from 'node:fs/promises'
 
