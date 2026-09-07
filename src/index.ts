@@ -6,7 +6,8 @@ import {
   listGroups,
 } from './groups.js'
 import { parseExcludedIdentities } from './identity.js'
-import { writeDryRunReports } from './report.js'
+import { executeSingleAdd, parseMaxUsers, selectPinnedCandidate } from './real-run.js'
+import { writeDryRunReports, writeRealRunReport } from './report.js'
 
 function previewLimit(): number {
   const parsed = Number(process.env.PREVIEW_LIMIT ?? '5')
@@ -16,15 +17,11 @@ function previewLimit(): number {
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.2.0')
+  console.log('       WHATSAPP-EXTRATOR v0.3.0')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
-  if (process.env.REAL_RUN === 'true') {
-    throw new Error(
-      'REAL_RUN ainda não é suportado. Esta versão executa somente DRY RUN e não adiciona participantes.',
-    )
-  }
+  const realRun = process.env.REAL_RUN === 'true'
 
   const sock = await connectWhatsApp()
   const groups = await listGroups(sock)
@@ -98,10 +95,48 @@ async function main() {
     )
   }
 
-  const reports = await writeDryRunReports(source, destination, analysis)
-  console.log(`\nRelatório JSON: ${reports.jsonPath}`)
-  console.log(`Relatório CSV:  ${reports.csvPath}`)
-  console.log('\nNenhum participante foi adicionado. Esta versão permanece somente DRY RUN.')
+  const dryRunReports = await writeDryRunReports(source, destination, analysis)
+  console.log(`\nRelatório JSON: ${dryRunReports.jsonPath}`)
+  console.log(`Relatório CSV:  ${dryRunReports.csvPath}`)
+
+  if (!realRun) {
+    console.log('\nNenhum participante foi adicionado. REAL_RUN=false.')
+    return
+  }
+
+  parseMaxUsers(process.env.MAX_USERS)
+
+  if (analysis.candidates.length === 0) {
+    throw new Error('Não há candidato válido para o teste real.')
+  }
+
+  const candidate = selectPinnedCandidate(
+    analysis.candidates,
+    process.env.TARGET_PARTICIPANT,
+  )
+
+  console.log('\n[REAL RUN CONTROLADO — 1 PARTICIPANTE]')
+  console.log(
+    `Alvo fixado: id=${candidate.id} phone=${candidate.phoneNumber ?? '-'} lid=${candidate.lid ?? '-'}`,
+  )
+  console.log('Limite rígido: MAX_USERS=1')
+  console.log('Nenhuma segunda pessoa será processada nesta execução.')
+
+  const result = await executeSingleAdd(sock, destination.id, candidate)
+  const realRunReport = await writeRealRunReport(source, destination, result)
+
+  console.log(`\nStatus da API do WhatsApp: ${result.apiStatus}`)
+  console.log(`Confirmação no Grupo B: ${result.confirmed ? 'SIM' : 'NÃO'}`)
+  console.log(`Resultado final: ${result.status}`)
+  if (result.error) {
+    console.log(`Detalhe: ${result.error}`)
+  }
+  console.log(`Relatório do teste real: ${realRunReport.jsonPath}`)
+  console.log(`CSV do teste real:       ${realRunReport.csvPath}`)
+
+  if (result.status !== 'added') {
+    process.exitCode = 1
+  }
 }
 
 main().catch((error) => {
