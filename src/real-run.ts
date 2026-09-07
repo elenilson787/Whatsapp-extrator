@@ -1,6 +1,7 @@
 import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys'
 import type { ParticipantRecord } from './groups.js'
-import { sameIdentity } from './identity.js'
+import type { IdentityLike } from './identity.js'
+import { identityJids, sameIdentity } from './identity.js'
 
 export type RealRunStatus =
   | 'added'
@@ -29,23 +30,22 @@ export function parseMaxUsers(raw?: string): number {
 
 export function selectPinnedCandidate(
   candidates: ParticipantRecord[],
-  targetRaw?: string,
+  targetRaw?: IdentityLike,
 ): ParticipantRecord {
-  const target = targetRaw?.trim()
-  if (!target) {
+  if (!targetRaw || identityJids(targetRaw).length === 0) {
     throw new Error(
-      'TARGET_PARTICIPANT é obrigatório no teste real. Informe o número/JID exato validado no DRY RUN.',
+      'TARGET_PHONE ou TARGET_PARTICIPANT é obrigatório no teste real. Informe uma identidade exata validada no DRY RUN.',
     )
   }
 
-  const matches = candidates.filter((candidate) => sameIdentity(candidate, target))
+  const matches = candidates.filter((candidate) => sameIdentity(candidate, targetRaw))
 
   if (matches.length === 0) {
-    throw new Error('TARGET_PARTICIPANT não corresponde a nenhum candidato atual. Execute novo DRY RUN.')
+    throw new Error('O alvo informado não corresponde a nenhum candidato atual. Execute novo DRY RUN.')
   }
 
   if (matches.length > 1) {
-    throw new Error('TARGET_PARTICIPANT corresponde a mais de um candidato. Execução abortada.')
+    throw new Error('O alvo informado corresponde a mais de um candidato. Execução abortada.')
   }
 
   return matches[0]
