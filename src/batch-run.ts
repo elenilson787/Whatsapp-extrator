@@ -3,7 +3,9 @@ import type { ParticipantRecord } from './groups.js'
 import type { IdentityLike } from './identity.js'
 import { identityJids, sameIdentity } from './identity.js'
 import { executeSingleAdd } from './real-run.js'
-import type { RealRunResult } from './real-run.js'
+import type { RealRunResult, RealRunStatus } from './real-run.js'
+
+export type BatchStatusSummary = Record<RealRunStatus, number>
 
 export type BatchRunResult = {
   startedAt: string
@@ -13,6 +15,7 @@ export type BatchRunResult = {
   attempted: number
   stoppedEarly: boolean
   stopReason?: string
+  summary: BatchStatusSummary
   results: RealRunResult[]
 }
 
@@ -87,6 +90,7 @@ function shouldStop(status: RealRunResult['status']): boolean {
     'forbidden',
     'rejected',
     'not_confirmed',
+    'outcome_unknown',
     'error',
   ].includes(status)
 }
@@ -101,6 +105,25 @@ export function parseBatchDelayMs(raw?: string): number {
 
 async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export function summarizeBatchResults(results: RealRunResult[]): BatchStatusSummary {
+  const summary: BatchStatusSummary = {
+    added: 0,
+    invite_required: 0,
+    permission_denied: 0,
+    forbidden: 0,
+    rejected: 0,
+    not_confirmed: 0,
+    outcome_unknown: 0,
+    error: 0,
+  }
+
+  for (const result of results) {
+    summary[result.status] += 1
+  }
+
+  return summary
 }
 
 export async function executeControlledBatch(
@@ -130,6 +153,9 @@ export async function executeControlledBatch(
       fetchDestination: options.fetchDestination,
     })
     results.push(result)
+
+    // Persistência vem antes de qualquer espera ou próxima tentativa.
+    // Assim, restart/queda após um resultado não causa repetição no próximo processo.
     await options.onResult?.(result)
 
     if (shouldStop(result.status)) {
@@ -150,6 +176,7 @@ export async function executeControlledBatch(
     attempted: results.length,
     stoppedEarly: results.length < candidates.length,
     stopReason,
+    summary: summarizeBatchResults(results),
     results,
   }
 }
