@@ -105,7 +105,11 @@ export function selectAutomaticCandidates(
     throw new Error('AUTO_BATCH aceita no máximo 5 participantes por execução.')
   }
 
+  // Nesta etapa do hardening, o modo automático usa somente participantes
+  // cujo PN foi resolvido pela sessão. O caminho PN -> add -> confirmação já
+  // foi validado em teste real; candidatos LID-only permanecem fora da fila.
   return candidates
+    .filter((candidate) => Boolean(candidate.phoneNumber))
     .filter((candidate) => !wasProcessed(candidate, checkpoint))
     .slice(0, maxUsers)
 }
