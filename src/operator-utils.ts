@@ -1,6 +1,17 @@
 import type { BatchRunResult } from './batch-run.js'
 
 export type OperatorMode = 'preview' | 'run' | 'exit'
+export type OperatorMainMenu = 'new' | 'continue' | 'status' | 'history' | 'exit'
+
+export function parseOperatorMainMenu(raw: string): OperatorMainMenu {
+  const value = raw.trim().toLowerCase()
+  if (['1', 'n', 'nova', 'novo', 'new'].includes(value)) return 'new'
+  if (['2', 'c', 'continuar', 'continue'].includes(value)) return 'continue'
+  if (['3', 'status', 'fila'].includes(value)) return 'status'
+  if (['4', 'h', 'historico', 'histórico', 'history'].includes(value)) return 'history'
+  if (['5', 's', 'sair', 'exit'].includes(value)) return 'exit'
+  throw new Error('Escolha 1 para nova operação, 2 para continuar, 3 para status, 4 para histórico ou 5 para sair.')
+}
 
 export function parseOperatorMode(raw: string): OperatorMode {
   const value = raw.trim().toLowerCase()
