@@ -5,8 +5,10 @@ import {
   getGroup,
   isCurrentUserAdmin,
   listGroups,
+  resolveTargetPhone,
 } from './groups.js'
-import { parseExcludedIdentities } from './identity.js'
+import type { ResolvedPhoneIdentity } from './groups.js'
+import { parseExcludedIdentities, sameIdentity } from './identity.js'
 import { executeSingleAdd, parseMaxUsers, selectPinnedCandidate } from './real-run.js'
 import { writeDryRunReports, writeRealRunReport } from './report.js'
 
@@ -22,7 +24,7 @@ function knownPhoneCount(participants: Array<{ phoneNumber?: string | null }>): 
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.3.2')
+  console.log('       WHATSAPP-EXTRATOR v0.3.3')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
@@ -105,6 +107,34 @@ async function main() {
     )
   }
 
+  const targetPhoneRaw = process.env.TARGET_PHONE?.trim()
+  const targetParticipantRaw = process.env.TARGET_PARTICIPANT?.trim()
+
+  if (targetPhoneRaw && targetParticipantRaw) {
+    throw new Error('Use TARGET_PHONE ou TARGET_PARTICIPANT, não os dois ao mesmo tempo.')
+  }
+
+  let resolvedTarget: ResolvedPhoneIdentity | undefined
+  if (targetPhoneRaw) {
+    resolvedTarget = await resolveTargetPhone(sock, targetPhoneRaw)
+    const matches = analysis.candidates.filter((candidate) =>
+      sameIdentity(candidate, resolvedTarget!),
+    )
+
+    console.log('\n[ALVO DIRECIONADO]')
+    console.log(`phone=${resolvedTarget.phoneNumber}`)
+    console.log(`lid=${resolvedTarget.lid ?? 'não resolvido pela sessão'}`)
+    console.log(`Candidato válido atual: ${matches.length === 1 ? 'SIM' : 'NÃO'}`)
+    if (matches.length === 1) {
+      const match = matches[0]
+      console.log(
+        `Correspondência: id=${match.id} phone=${match.phoneNumber ?? '-'} lid=${match.lid ?? '-'}`,
+      )
+    } else if (matches.length > 1) {
+      console.log('Mais de uma correspondência encontrada; execução real será bloqueada.')
+    }
+  }
+
   const dryRunReports = await writeDryRunReports(source, destination, analysis)
   console.log(`\nRelatório JSON: ${dryRunReports.jsonPath}`)
   console.log(`Relatório CSV:  ${dryRunReports.csvPath}`)
@@ -136,10 +166,18 @@ async function main() {
     throw new Error('Não há candidato válido para o teste real.')
   }
 
-  const candidate = selectPinnedCandidate(
+  const selected = selectPinnedCandidate(
     analysis.candidates,
-    process.env.TARGET_PARTICIPANT,
+    resolvedTarget ?? targetParticipantRaw,
   )
+
+  const candidate = resolvedTarget
+    ? {
+        ...selected,
+        phoneNumber: resolvedTarget.phoneNumber,
+        lid: resolvedTarget.lid ?? selected.lid,
+      }
+    : selected
 
   console.log('\n[REAL RUN CONTROLADO — 1 PARTICIPANTE]')
   console.log(
