@@ -5,6 +5,7 @@ import { sameIdentity } from './identity.js'
 export type RealRunStatus =
   | 'added'
   | 'invite_required'
+  | 'forbidden'
   | 'rejected'
   | 'not_confirmed'
   | 'error'
@@ -58,6 +59,19 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function hasNodeTag(value: unknown, expectedTag: string): boolean {
+  if (!value || typeof value !== 'object') return false
+
+  const node = value as { tag?: unknown; content?: unknown }
+  if (node.tag === expectedTag) return true
+
+  if (Array.isArray(node.content)) {
+    return node.content.some((child) => hasNodeTag(child, expectedTag))
+  }
+
+  return false
+}
+
 async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -89,18 +103,22 @@ export async function executeSingleAdd(
 
   try {
     const responses = await sock.groupParticipantsUpdate(destinationJid, [requestJid], 'add')
-    const apiStatus = responses[0]?.status ?? 'no_response'
+    const response = responses[0]
+    const apiStatus = response?.status ?? 'no_response'
 
     if (apiStatus === '403') {
+      const inviteRequired = hasNodeTag(response?.content, 'add_request')
+
       return {
         attemptedAt,
-        status: 'invite_required',
+        status: inviteRequired ? 'invite_required' : 'forbidden',
         target: candidate,
         requestJid,
         apiStatus,
         confirmed: false,
-        error:
-          'O WhatsApp recusou a adição direta com 403. Esse retorno é compatível com restrição de privacidade do participante; não haverá nova tentativa automática.',
+        error: inviteRequired
+          ? 'O WhatsApp devolveu add_request: a adição direta foi bloqueada e o participante precisa de convite. Nenhuma nova tentativa automática será feita.'
+          : 'O WhatsApp recusou a operação com 403 sem add_request. Isso é compatível com falta de permissão no grupo ou outra restrição do servidor. Nenhuma nova tentativa automática será feita.',
       }
     }
 
