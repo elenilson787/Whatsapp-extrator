@@ -2,7 +2,12 @@ import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys'
 import type { ParticipantRecord } from './groups.js'
 import { sameIdentity } from './identity.js'
 
-export type RealRunStatus = 'added' | 'rejected' | 'not_confirmed' | 'error'
+export type RealRunStatus =
+  | 'added'
+  | 'invite_required'
+  | 'rejected'
+  | 'not_confirmed'
+  | 'error'
 
 export type RealRunResult = {
   attemptedAt: string
@@ -85,6 +90,19 @@ export async function executeSingleAdd(
   try {
     const responses = await sock.groupParticipantsUpdate(destinationJid, [requestJid], 'add')
     const apiStatus = responses[0]?.status ?? 'no_response'
+
+    if (apiStatus === '403') {
+      return {
+        attemptedAt,
+        status: 'invite_required',
+        target: candidate,
+        requestJid,
+        apiStatus,
+        confirmed: false,
+        error:
+          'O WhatsApp recusou a adição direta com 403. Esse retorno é compatível com restrição de privacidade do participante; não haverá nova tentativa automática.',
+      }
+    }
 
     if (apiStatus !== '200') {
       return {
