@@ -13,7 +13,7 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@hapi/boom": "10.0.4",
+    "@hapi/boom": "10.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc.6",
     "pino": "9.7.0",
     "qrcode-terminal": "0.12.0"
