@@ -107,10 +107,20 @@ export function selectAutomaticCandidates(
     throw new Error('AUTO_BATCH aceita no máximo 5 participantes por execução.')
   }
 
-  const allowedPhones = optInPhones ?? loadOptInPhonesFromEnv()
-  const optedInCandidates = filterCandidatesByOptIn(candidates, allowedPhones)
+  const configuredOptInFile = process.env.OPT_IN_FILE?.trim()
+  const allowedPhones = optInPhones ?? (
+    configuredOptInFile ? loadOptInPhonesFromEnv() : undefined
+  )
 
-  return optedInCandidates
+  // Se houver arquivo de opt-in, fazemos o cruzamento estrito com a allowlist.
+  // Sem arquivo, a lista é extraída automaticamente do próprio Grupo A,
+  // usando somente candidatos cujo telefone (PN) foi resolvido pela sessão.
+  // A execução REAL continua protegida por OPT_IN_SOURCE_CONFIRMED=true no index.
+  const eligibleCandidates = allowedPhones
+    ? filterCandidatesByOptIn(candidates, allowedPhones)
+    : candidates.filter((candidate) => Boolean(candidate.phoneNumber))
+
+  return eligibleCandidates
     .filter((candidate) => !wasProcessed(candidate, checkpoint))
     .slice(0, maxUsers)
 }
