@@ -10,12 +10,21 @@ import qrcode from 'qrcode-terminal'
 import { mkdir } from 'node:fs/promises'
 
 export type ConnectedClient = WASocket
+export type DisconnectAction = 'restart' | 'logged-out' | 'fatal'
 
 const AUTH_DIR = 'data/auth'
+const MAX_RESTARTS = 3
 
-export async function connectWhatsApp(): Promise<ConnectedClient> {
-  await mkdir('data', { recursive: true })
+export function classifyDisconnect(code?: number): DisconnectAction {
+  if (code === DisconnectReason.restartRequired) return 'restart'
+  if (code === DisconnectReason.loggedOut) return 'logged-out'
+  return 'fatal'
+}
 
+async function connectAttempt(): Promise<
+  | { kind: 'open'; sock: WASocket }
+  | { kind: 'restart' }
+> {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
   const { version } = await fetchLatestBaileysVersion()
 
@@ -40,23 +49,55 @@ export async function connectWhatsApp(): Promise<ConnectedClient> {
 
       if (connection === 'open' && !settled) {
         settled = true
-        console.log('\nWhatsApp conectado com sucesso.\n')
-        resolve(sock)
+        resolve({ kind: 'open', sock })
+        return
       }
 
       if (connection === 'close' && !settled) {
         const code = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode
-        const loggedOut = code === DisconnectReason.loggedOut
+        const action = classifyDisconnect(code)
         settled = true
 
+        if (action === 'restart') {
+          resolve({ kind: 'restart' })
+          return
+        }
+
+        if (action === 'logged-out') {
+          reject(
+            new Error(
+              'A sessão foi encerrada no WhatsApp. Remova data/auth e conecte novamente.',
+            ),
+          )
+          return
+        }
+
         reject(
-          new Error(
-            loggedOut
-              ? 'A sessão foi encerrada no WhatsApp. Remova data/auth e conecte novamente.'
-              : `Não foi possível conectar ao WhatsApp. Código: ${code ?? 'desconhecido'}`,
-          ),
+          new Error(`Não foi possível conectar ao WhatsApp. Código: ${code ?? 'desconhecido'}`),
         )
       }
     })
   })
+}
+
+export async function connectWhatsApp(): Promise<ConnectedClient> {
+  await mkdir('data', { recursive: true })
+
+  for (let restart = 0; restart <= MAX_RESTARTS; restart += 1) {
+    const result = await connectAttempt()
+
+    if (result.kind === 'open') {
+      console.log('\nWhatsApp conectado com sucesso.\n')
+      return result.sock
+    }
+
+    if (restart < MAX_RESTARTS) {
+      console.log('\nWhatsApp solicitou reinício da conexão (515). Reconectando automaticamente...')
+      await new Promise((resolve) => setTimeout(resolve, 750))
+    }
+  }
+
+  throw new Error(
+    `O WhatsApp solicitou reinício mais de ${MAX_RESTARTS} vezes. Tente conectar novamente.`,
+  )
 }
