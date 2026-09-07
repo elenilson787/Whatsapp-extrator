@@ -6,6 +6,7 @@ import { identityJids, sameIdentity } from './identity.js'
 export type RealRunStatus =
   | 'added'
   | 'invite_required'
+  | 'permission_denied'
   | 'forbidden'
   | 'rejected'
   | 'not_confirmed'
@@ -23,7 +24,7 @@ export type RealRunResult = {
 
 export function parseMaxUsers(raw?: string): number {
   if ((raw ?? '').trim() !== '1') {
-    throw new Error('No teste real, MAX_USERS deve ser exatamente 1.')
+    throw new Error('No teste real individual, MAX_USERS deve ser exatamente 1.')
   }
   return 1
 }
@@ -119,6 +120,18 @@ export async function executeSingleAdd(
         error: inviteRequired
           ? 'O WhatsApp devolveu add_request: a adição direta foi bloqueada e o participante precisa de convite. Nenhuma nova tentativa automática será feita.'
           : 'O WhatsApp recusou a operação com 403 sem add_request. Isso é compatível com falta de permissão no grupo ou outra restrição do servidor. Nenhuma nova tentativa automática será feita.',
+      }
+    }
+
+    if (apiStatus === '421') {
+      return {
+        attemptedAt,
+        status: 'permission_denied',
+        target: candidate,
+        requestJid,
+        apiStatus,
+        confirmed: false,
+        error: 'O WhatsApp recusou a inclusão com status 421. A operação foi classificada como permissão insuficiente no destino e não será repetida automaticamente.',
       }
     }
 
