@@ -4,6 +4,7 @@ import type { GroupMetadata, WASocket } from '@whiskeysockets/baileys'
 import type { ParticipantRecord } from '../src/groups.js'
 import {
   executeControlledBatch,
+  parseBatchDelayMs,
   parseBatchMaxUsers,
   parseTargetPhones,
   selectPinnedCandidates,
@@ -36,6 +37,13 @@ test('parseBatchMaxUsers aceita apenas 2 a 5', () => {
   assert.throws(() => parseBatchMaxUsers('6'))
 })
 
+test('parseBatchDelayMs aplica intervalo fixo seguro', () => {
+  assert.equal(parseBatchDelayMs(undefined), 15000)
+  assert.equal(parseBatchDelayMs('1'), 10000)
+  assert.equal(parseBatchDelayMs('30000'), 30000)
+  assert.equal(parseBatchDelayMs('999999'), 120000)
+})
+
 test('parseTargetPhones remove formatação e rejeita duplicados', () => {
   assert.deepEqual(parseTargetPhones('+55 (11) 00000-0001;5511000000002'), [
     '5511000000001',
@@ -62,6 +70,8 @@ test('selectPinnedCandidates exige alvos válidos e preserva ordem', () => {
 
 test('lote continua após invite_required mas para em permission_denied', async () => {
   let calls = 0
+  let waits = 0
+  let persisted = 0
   const sock = {
     groupParticipantsUpdate: async (_jid: string, participants: string[]) => {
       calls += 1
@@ -86,10 +96,18 @@ test('lote continua após invite_required mas para em permission_denied', async 
 
   const result = await executeControlledBatch(sock, 'dest@g.us', [a, b, c], {
     maxUsers: 5,
-    delayMs: 1,
+    delayMs: 15000,
+    waitFn: async () => {
+      waits += 1
+    },
+    onResult: async () => {
+      persisted += 1
+    },
   })
 
   assert.equal(calls, 2)
+  assert.equal(waits, 1)
+  assert.equal(persisted, 2)
   assert.equal(result.attempted, 2)
   assert.equal(result.stoppedEarly, true)
   assert.equal(result.results[0]?.status, 'invite_required')
