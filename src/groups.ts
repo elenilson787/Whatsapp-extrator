@@ -3,7 +3,8 @@ import type {
   GroupMetadata,
   GroupParticipant,
 } from '@whiskeysockets/baileys'
-import { sameIdentity } from './identity.js'
+import { isLidUser } from '@whiskeysockets/baileys'
+import { normalizeInputJid, sameIdentity } from './identity.js'
 
 export type GroupSummary = {
   id: string
@@ -26,6 +27,12 @@ export type MigrationAnalysis = {
   alreadyInDestination: ParticipantRecord[]
   duplicateSourceSkipped: ParticipantRecord[]
   candidates: ParticipantRecord[]
+}
+
+type LidMappingResolver = {
+  getPNsForLIDs: (
+    lids: string[],
+  ) => Promise<Array<{ lid: string; pn: string }> | null>
 }
 
 function isOwner(group: GroupMetadata, participant: ParticipantRecord): boolean {
@@ -56,6 +63,64 @@ export function isCurrentUserAdmin(group: GroupMetadata, selfJids: string[]): bo
   return Boolean(me && isPrivilegedParticipant(group, me))
 }
 
+function participantLid(participant: ParticipantRecord): string | undefined {
+  for (const value of [participant.lid, participant.id]) {
+    if (value && isLidUser(value)) {
+      return normalizeInputJid(value)
+    }
+  }
+  return undefined
+}
+
+export async function enrichGroupPhoneNumbers(
+  group: GroupMetadata,
+  resolver: LidMappingResolver,
+): Promise<GroupMetadata> {
+  const lids = [
+    ...new Set(
+      group.participants
+        .filter((participant) => !participant.phoneNumber)
+        .map(participantLid)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ]
+
+  if (lids.length === 0) return group
+
+  let mappings: Array<{ lid: string; pn: string }> | null
+  try {
+    mappings = await resolver.getPNsForLIDs(lids)
+  } catch {
+    // O enriquecimento é auxiliar. Se o armazenamento de aliases não puder
+    // ser consultado, preservamos o metadata original e o DRY RUN continua.
+    return group
+  }
+
+  if (!mappings?.length) return group
+
+  const pnByLid = new Map(
+    mappings.map(({ lid, pn }) => [normalizeInputJid(lid), normalizeInputJid(pn)]),
+  )
+
+  let changed = false
+  const participants = group.participants.map((participant) => {
+    if (participant.phoneNumber) return participant
+
+    const lid = participantLid(participant)
+    const phoneNumber = lid ? pnByLid.get(lid) : undefined
+    if (!phoneNumber) return participant
+
+    changed = true
+    return {
+      ...participant,
+      phoneNumber,
+      lid: participant.lid ?? lid,
+    }
+  })
+
+  return changed ? { ...group, participants } : group
+}
+
 export async function listGroups(sock: WASocket): Promise<GroupSummary[]> {
   const groups = await sock.groupFetchAllParticipating()
   const account = sock.user as { id?: string; lid?: string } | undefined
@@ -74,7 +139,8 @@ export async function listGroups(sock: WASocket): Promise<GroupSummary[]> {
 }
 
 export async function getGroup(sock: WASocket, jid: string): Promise<GroupMetadata> {
-  return sock.groupMetadata(jid)
+  const group = await sock.groupMetadata(jid)
+  return enrichGroupPhoneNumbers(group, sock.signalRepository.lidMapping)
 }
 
 export function analyzeMigration(
