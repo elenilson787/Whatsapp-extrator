@@ -8,9 +8,10 @@ import {
   resolveTargetPhone,
 } from './groups.js'
 import type { ResolvedPhoneIdentity } from './groups.js'
-import { parseExcludedIdentities, sameIdentity } from './identity.js'
+import { parseExcludedIdentities } from './identity.js'
 import { executeSingleAdd, parseMaxUsers, selectPinnedCandidate } from './real-run.js'
 import { writeDryRunReports, writeRealRunReport } from './report.js'
+import { diagnoseTarget, targetDiagnosisMessage } from './target-diagnosis.js'
 
 function previewLimit(): number {
   const parsed = Number(process.env.PREVIEW_LIMIT ?? '5')
@@ -24,7 +25,7 @@ function knownPhoneCount(participants: Array<{ phoneNumber?: string | null }>): 
 
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.3.3')
+  console.log('       WHATSAPP-EXTRATOR v0.3.4')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
@@ -117,21 +118,19 @@ async function main() {
   let resolvedTarget: ResolvedPhoneIdentity | undefined
   if (targetPhoneRaw) {
     resolvedTarget = await resolveTargetPhone(sock, targetPhoneRaw)
-    const matches = analysis.candidates.filter((candidate) =>
-      sameIdentity(candidate, resolvedTarget!),
-    )
+    const diagnosis = diagnoseTarget(analysis, resolvedTarget)
 
     console.log('\n[ALVO DIRECIONADO]')
     console.log(`phone=${resolvedTarget.phoneNumber}`)
     console.log(`lid=${resolvedTarget.lid ?? 'não resolvido pela sessão'}`)
-    console.log(`Candidato válido atual: ${matches.length === 1 ? 'SIM' : 'NÃO'}`)
-    if (matches.length === 1) {
-      const match = matches[0]
+    console.log(`Candidato válido atual: ${diagnosis.code === 'candidate' ? 'SIM' : 'NÃO'}`)
+    console.log(`Motivo: ${targetDiagnosisMessage(diagnosis.code)}`)
+
+    if (diagnosis.participant) {
+      const match = diagnosis.participant
       console.log(
         `Correspondência: id=${match.id} phone=${match.phoneNumber ?? '-'} lid=${match.lid ?? '-'}`,
       )
-    } else if (matches.length > 1) {
-      console.log('Mais de uma correspondência encontrada; execução real será bloqueada.')
     }
   }
 
