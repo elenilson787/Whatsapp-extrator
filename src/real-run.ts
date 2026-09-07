@@ -10,6 +10,7 @@ export type RealRunStatus =
   | 'forbidden'
   | 'rejected'
   | 'not_confirmed'
+  | 'outcome_unknown'
   | 'error'
 
 export type RealRunResult = {
@@ -102,56 +103,75 @@ export async function executeSingleAdd(
     }
   }
 
+  let responses: Awaited<ReturnType<typeof sock.groupParticipantsUpdate>>
   try {
-    const responses = await sock.groupParticipantsUpdate(destinationJid, [requestJid], 'add')
-    const response = responses[0]
-    const apiStatus = response?.status ?? 'no_response'
-
-    if (apiStatus === '403') {
-      const inviteRequired = hasNodeTag(response?.content, 'add_request')
-
-      return {
-        attemptedAt,
-        status: inviteRequired ? 'invite_required' : 'forbidden',
-        target: candidate,
-        requestJid,
-        apiStatus,
-        confirmed: false,
-        error: inviteRequired
-          ? 'O WhatsApp devolveu add_request: a adição direta foi bloqueada e o participante precisa de convite. Nenhuma nova tentativa automática será feita.'
-          : 'O WhatsApp recusou a operação com 403 sem add_request. Isso é compatível com falta de permissão no grupo ou outra restrição do servidor. Nenhuma nova tentativa automática será feita.',
-      }
+    // Nunca repetimos automaticamente esta chamada. Se a conexão cair aqui,
+    // não é possível saber com segurança se o servidor aplicou a inclusão.
+    responses = await sock.groupParticipantsUpdate(destinationJid, [requestJid], 'add')
+  } catch (error) {
+    return {
+      attemptedAt,
+      status: 'outcome_unknown',
+      target: candidate,
+      requestJid,
+      apiStatus: 'exception_during_add',
+      confirmed: false,
+      error: `A conexão falhou durante a tentativa de inclusão. O resultado é incerto e não será repetido automaticamente: ${errorMessage(error)}`,
     }
+  }
 
-    if (apiStatus === '421') {
-      return {
-        attemptedAt,
-        status: 'permission_denied',
-        target: candidate,
-        requestJid,
-        apiStatus,
-        confirmed: false,
-        error: 'O WhatsApp recusou a inclusão com status 421. A operação foi classificada como permissão insuficiente no destino e não será repetida automaticamente.',
-      }
+  const response = responses[0]
+  const apiStatus = response?.status ?? 'no_response'
+
+  if (apiStatus === '403') {
+    const inviteRequired = hasNodeTag(response?.content, 'add_request')
+
+    return {
+      attemptedAt,
+      status: inviteRequired ? 'invite_required' : 'forbidden',
+      target: candidate,
+      requestJid,
+      apiStatus,
+      confirmed: false,
+      error: inviteRequired
+        ? 'O WhatsApp devolveu add_request: a adição direta foi bloqueada e o participante precisa de convite. Nenhuma nova tentativa automática será feita.'
+        : 'O WhatsApp recusou a operação com 403 sem add_request. Isso é compatível com falta de permissão no grupo ou outra restrição do servidor. Nenhuma nova tentativa automática será feita.',
     }
+  }
 
-    if (apiStatus !== '200') {
-      return {
-        attemptedAt,
-        status: 'rejected',
-        target: candidate,
-        requestJid,
-        apiStatus,
-        confirmed: false,
-      }
+  if (apiStatus === '421') {
+    return {
+      attemptedAt,
+      status: 'permission_denied',
+      target: candidate,
+      requestJid,
+      apiStatus,
+      confirmed: false,
+      error: 'O WhatsApp recusou a inclusão com status 421. A operação foi classificada como permissão insuficiente no destino e não será repetida automaticamente.',
     }
+  }
 
-    const attempts = Math.min(5, Math.max(1, options?.confirmationAttempts ?? 3))
-    const delayMs = Math.min(5000, Math.max(0, options?.confirmationDelayMs ?? 1200))
-    const fetchDestination = options?.fetchDestination ?? (() => sock.groupMetadata(destinationJid))
+  if (apiStatus !== '200') {
+    return {
+      attemptedAt,
+      status: 'rejected',
+      target: candidate,
+      requestJid,
+      apiStatus,
+      confirmed: false,
+    }
+  }
 
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  const attempts = Math.min(5, Math.max(1, options?.confirmationAttempts ?? 3))
+  const delayMs = Math.min(5000, Math.max(0, options?.confirmationDelayMs ?? 1200))
+  const fetchDestination = options?.fetchDestination ?? (() => sock.groupMetadata(destinationJid))
+  let successfulVerificationRead = false
+  let lastVerificationError: string | undefined
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
       const refreshed = await fetchDestination()
+      successfulVerificationRead = true
       const confirmed = refreshed.participants.some((participant) =>
         sameIdentity(candidate, participant),
       )
@@ -166,30 +186,34 @@ export async function executeSingleAdd(
           confirmed: true,
         }
       }
-
-      if (attempt < attempts && delayMs > 0) {
-        await wait(delayMs)
-      }
+    } catch (error) {
+      lastVerificationError = errorMessage(error)
     }
 
+    if (attempt < attempts && delayMs > 0) {
+      await wait(delayMs)
+    }
+  }
+
+  if (!successfulVerificationRead) {
     return {
       attemptedAt,
-      status: 'not_confirmed',
+      status: 'outcome_unknown',
       target: candidate,
       requestJid,
       apiStatus,
       confirmed: false,
-      error: 'O WhatsApp respondeu 200, mas o participante não apareceu no Grupo B após a confirmação.',
+      error: `O WhatsApp respondeu 200, mas não foi possível reler o Grupo B para confirmar o resultado. Nenhuma nova tentativa automática será feita${lastVerificationError ? `: ${lastVerificationError}` : '.'}`,
     }
-  } catch (error) {
-    return {
-      attemptedAt,
-      status: 'error',
-      target: candidate,
-      requestJid,
-      apiStatus: 'exception',
-      confirmed: false,
-      error: errorMessage(error),
-    }
+  }
+
+  return {
+    attemptedAt,
+    status: 'not_confirmed',
+    target: candidate,
+    requestJid,
+    apiStatus,
+    confirmed: false,
+    error: 'O WhatsApp respondeu 200, mas o participante não apareceu no Grupo B após a confirmação.',
   }
 }
