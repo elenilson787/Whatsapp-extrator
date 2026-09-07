@@ -16,9 +16,13 @@ function previewLimit(): number {
   return Math.min(50, Math.max(1, Math.floor(parsed)))
 }
 
+function knownPhoneCount(participants: Array<{ phoneNumber?: string | null }>): number {
+  return participants.filter((participant) => Boolean(participant.phoneNumber)).length
+}
+
 async function main() {
   console.log('========================================')
-  console.log('       WHATSAPP-EXTRATOR v0.3.1')
+  console.log('       WHATSAPP-EXTRATOR v0.3.2')
   console.log('========================================')
   console.log('Conectando ao WhatsApp...')
 
@@ -70,6 +74,12 @@ async function main() {
 
   console.log(`\nConta no Grupo A: ${sourceIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
   console.log(`Conta no Grupo B: ${destinationIsAdmin ? 'ADMIN' : 'MEMBRO'}`)
+  console.log(
+    `PN conhecido na origem: ${knownPhoneCount(source.participants)}/${source.participants.length}`,
+  )
+  console.log(
+    `PN conhecido no destino: ${knownPhoneCount(destination.participants)}/${destination.participants.length}`,
+  )
 
   const excludedJids = parseExcludedIdentities(process.env.EXCLUDED_JIDS)
   const analysis = analyzeMigration(source, destination, { selfJids, excludedJids })
