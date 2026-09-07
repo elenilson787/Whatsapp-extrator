@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { GroupMetadata, GroupParticipant } from '@whiskeysockets/baileys'
-import { analyzeMigration, isCurrentUserAdmin } from '../src/groups.js'
+import {
+  analyzeMigration,
+  enrichGroupPhoneNumbers,
+  isCurrentUserAdmin,
+} from '../src/groups.js'
 
 function participant(
   id: string,
@@ -38,6 +42,62 @@ test('reconhece conta administradora por alias PN/LID', () => {
     isCurrentUserAdmin(metadata, ['5593999990000@s.whatsapp.net']),
     true,
   )
+})
+
+test('resolve phoneNumber a partir de LID conhecido na sessão', async () => {
+  const metadata = group('source@g.us', [
+    participant('106945021214761@lid'),
+    participant('5593999990001@s.whatsapp.net', {
+      phoneNumber: '5593999990001@s.whatsapp.net',
+    }),
+  ])
+
+  let requested: string[] = []
+  const enriched = await enrichGroupPhoneNumbers(metadata, {
+    getPNsForLIDs: async (lids) => {
+      requested = lids
+      return [
+        {
+          lid: '106945021214761@lid',
+          pn: '557791457500:0@s.whatsapp.net',
+        },
+      ]
+    },
+  })
+
+  assert.deepEqual(requested, ['106945021214761@lid'])
+  assert.equal(
+    enriched.participants[0]?.phoneNumber,
+    '557791457500@s.whatsapp.net',
+  )
+  assert.equal(enriched.participants[0]?.lid, '106945021214761@lid')
+  assert.equal(
+    enriched.participants[1]?.phoneNumber,
+    '5593999990001@s.whatsapp.net',
+  )
+})
+
+test('mantém LID sem phone quando a sessão não conhece o mapeamento', async () => {
+  const metadata = group('source@g.us', [participant('123456789@lid')])
+
+  const enriched = await enrichGroupPhoneNumbers(metadata, {
+    getPNsForLIDs: async () => null,
+  })
+
+  assert.equal(enriched.participants[0]?.phoneNumber, undefined)
+})
+
+test('falha no armazenamento de aliases não interrompe o DRY RUN', async () => {
+  const metadata = group('source@g.us', [participant('123456789@lid')])
+
+  const enriched = await enrichGroupPhoneNumbers(metadata, {
+    getPNsForLIDs: async () => {
+      throw new Error('storage unavailable')
+    },
+  })
+
+  assert.equal(enriched.participants[0]?.id, '123456789@lid')
+  assert.equal(enriched.participants[0]?.phoneNumber, undefined)
 })
 
 test('remove admin, owner, self, exclusão manual, já existente e duplicado', () => {
