@@ -91,10 +91,12 @@ function shouldStop(status: RealRunResult['status']): boolean {
   ].includes(status)
 }
 
-function safeDelayMs(raw?: string): number {
-  const parsed = Number(raw ?? '5000')
-  if (!Number.isFinite(parsed)) return 5000
-  return Math.min(60000, Math.max(1000, Math.floor(parsed)))
+export function parseBatchDelayMs(raw?: string): number {
+  const parsed = Number(raw ?? '15000')
+  if (!Number.isFinite(parsed)) return 15000
+  // Intervalo fixo para limitar carga e manter a execução controlada.
+  // Não há aleatorização nem lógica destinada a contornar controles do WhatsApp.
+  return Math.min(120000, Math.max(10000, Math.floor(parsed)))
 }
 
 async function wait(ms: number): Promise<void> {
@@ -109,6 +111,8 @@ export async function executeControlledBatch(
     maxUsers: number
     delayMs?: number
     fetchDestination?: () => Promise<GroupMetadata>
+    onResult?: (result: RealRunResult) => Promise<void> | void
+    waitFn?: (ms: number) => Promise<void>
   },
 ): Promise<BatchRunResult> {
   if (candidates.length > options.maxUsers) {
@@ -117,7 +121,8 @@ export async function executeControlledBatch(
 
   const startedAt = new Date().toISOString()
   const results: RealRunResult[] = []
-  const delayMs = safeDelayMs(String(options.delayMs ?? 5000))
+  const delayMs = parseBatchDelayMs(String(options.delayMs ?? 15000))
+  const waitFn = options.waitFn ?? wait
   let stopReason: string | undefined
 
   for (const [index, candidate] of candidates.entries()) {
@@ -125,6 +130,7 @@ export async function executeControlledBatch(
       fetchDestination: options.fetchDestination,
     })
     results.push(result)
+    await options.onResult?.(result)
 
     if (shouldStop(result.status)) {
       stopReason = `Lote interrompido após ${result.status} (API ${result.apiStatus}).`
@@ -132,7 +138,7 @@ export async function executeControlledBatch(
     }
 
     if (index < candidates.length - 1) {
-      await wait(delayMs)
+      await waitFn(delayMs)
     }
   }
 
